@@ -60,6 +60,32 @@ function Welcome() {
     }
   }, [userId]);
 
+  // Check if playlist exists after loading userPlaylist
+  useEffect(() => {
+    if (accessToken && userPlaylist && userPlaylist.playlist_id) {
+      fetch("http://127.0.0.1:5173/api/spotify/playlist_exists_in_list", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          accessToken,
+          playlistId: userPlaylist.playlist_id,
+        }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          if (!data.exists) {
+            setUserPlaylist((prev) => ({ ...prev, playlist_id: null }));
+            setError("Your playlist was deleted. Please create a new one.");
+          }
+        })
+        .catch(() => {
+          setError("Error checking playlist existence");
+        });
+    }
+  }, [accessToken, userPlaylist && userPlaylist.playlist_id]);
+
   const handleCreatePlaylist = () => {
     setError("");
     if (!playlistName || !maxSongs || maxSongs < 1 || maxSongs > 50) {

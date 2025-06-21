@@ -64,9 +64,11 @@ pool.query('CREATE SCHEMA IF NOT EXISTS spotify_app')
     console.log('spotify_app schema is ready');
     // Set search_path after schema is ready
     pool.query('SET search_path TO spotify_app');
+  })
+  .then(() => {
     // Now create the table
     return pool.query(`
-      CREATE TABLE IF NOT EXISTS user_playlists (
+      CREATE TABLE IF NOT EXISTS spotify_app.user_playlists (
         id SERIAL PRIMARY KEY,
         user_id VARCHAR(255) UNIQUE NOT NULL,
         playlist_id VARCHAR(255),
@@ -147,19 +149,19 @@ app.get('/callback', async (req, res) => {
       if (refresh_token && userId) {
         // Check if user exists in user_playlists
         const userCheck = await pool.query(
-          'SELECT * FROM user_playlists WHERE user_id = $1',
+          'SELECT * FROM spotify_app.user_playlists WHERE user_id = $1',
           [userId]
         );
         if (userCheck.rows.length === 0) {
           // Insert new user with refresh_token
           await pool.query(
-            'INSERT INTO user_playlists (user_id, refresh_token) VALUES ($1, $2)',
+            'INSERT INTO spotify_app.user_playlists (user_id, refresh_token) VALUES ($1, $2)',
             [userId, refresh_token]
           );
         } else {
           // Update existing user's refresh_token
           await pool.query(
-            'UPDATE user_playlists SET refresh_token = $1 WHERE user_id = $2',
+            'UPDATE spotify_app.user_playlists SET refresh_token = $1 WHERE user_id = $2',
             [refresh_token, userId]
           );
         }
@@ -186,7 +188,7 @@ app.post('/api/user_playlists', async (req, res) => {
   try {
     // Check if user already exists
     const check = await pool.query(
-      'SELECT * FROM user_playlists WHERE user_id = $1',
+      'SELECT * FROM spotify_app.user_playlists WHERE user_id = $1',
       [userId]
     );
     if (check.rows.length > 0) {
@@ -196,7 +198,7 @@ app.post('/api/user_playlists', async (req, res) => {
     }
     // Insert if not exists
     const result = await pool.query(
-      'INSERT INTO user_playlists (user_id) VALUES ($1) RETURNING *',
+      'INSERT INTO spotify_app.user_playlists (user_id) VALUES ($1) RETURNING *',
       [userId]
     );
     res.json({ userPlaylist: result.rows[0], alreadyExists: false });
@@ -214,7 +216,7 @@ app.post('/api/user_playlists/update', async (req, res) => {
   }
   try {
     const result = await pool.query(
-      'UPDATE user_playlists SET playlist_id = $1 WHERE user_id = $2 RETURNING *',
+      'UPDATE spotify_app.user_playlists SET playlist_id = $1 WHERE user_id = $2 RETURNING *',
       [playlistId, userId]
     );
     if (result.rows.length === 0) {
@@ -260,7 +262,7 @@ app.post('/api/spotify/create_playlist', async (req, res) => {
     }
 
     await pool.query(
-      'UPDATE user_playlists SET playlist_id = $1, song_count = $2 WHERE user_id = $3',
+      'UPDATE spotify_app.user_playlists SET playlist_id = $1, song_count = $2 WHERE user_id = $3',
       [spotifyPlaylistId, parseInt(maxSongs, 10), userId]
     );
     res.json({ spotifyPlaylistId });
@@ -270,12 +272,68 @@ app.post('/api/spotify/create_playlist', async (req, res) => {
   }
 });
 
+// Endpoint to check if a playlist exists on Spotify
+app.post('/api/spotify/check_playlist', async (req, res) => {
+  const { accessToken, playlistId } = req.body;
+  if (!accessToken || !playlistId) {
+    return res.status(400).json({ error: 'accessToken and playlistId are required' });
+  }
+  try {
+    await axios.get(
+      `https://api.spotify.com/v1/playlists/${playlistId}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    // If no error, playlist exists
+    res.json({ exists: true });
+    console.log('Playlist exists:', playlistId);
+  } catch (err) {
+    const statusCode = err.response?.status;
+    console.log(`Spotify API response status for playlist ${playlistId}:`, statusCode);
+    if (statusCode === 404 || statusCode === 403) {
+      // 404: Not found, 403: Forbidden (e.g., deleted or access revoked)
+      console.log('Playlist does not exist or access denied:', playlistId);
+      res.json({ exists: false });
+    } else {
+      console.error('Error checking playlist existence:', err.response?.data || err.message);
+      res.status(500).json({ error: 'Failed to check playlist existence' });
+    }
+  }
+});
+
+// Endpoint to check if a playlist exists in the user's playlist list
+app.post('/api/spotify/playlist_exists_in_list', async (req, res) => {
+  const { accessToken, playlistId } = req.body;
+  if (!accessToken || !playlistId) {
+    return res.status(400).json({ error: 'accessToken and playlistId are required' });
+  }
+  try {
+    let url = 'https://api.spotify.com/v1/me/playlists?limit=50';
+    let exists = false;
+    while (url) {
+      const response = await axios.get(url, {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (response.data && response.data.items) {
+        if (response.data.items.some(pl => pl.id === playlistId)) {
+          exists = true;
+          break;
+        }
+      }
+      url = response.data.next;
+    }
+    res.json({ exists });
+  } catch (err) {
+    console.error('Error checking playlist in user list:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Failed to check playlist in user list' });
+  }
+});
+
 cron.schedule('0 * * * *', async () => {
   console.log('Starting hourly playlist refresh job...');
   try {
     // Get all users with refresh tokens and playlist info
     const { rows: users } = await pool.query(
-      'SELECT user_id, refresh_token, playlist_id, song_count FROM user_playlists WHERE refresh_token IS NOT NULL AND playlist_id IS NOT NULL'
+      'SELECT user_id, refresh_token, playlist_id, song_count FROM spotify_app.user_playlists WHERE refresh_token IS NOT NULL AND playlist_id IS NOT NULL'
     );
 
     for (const user of users) {
@@ -295,7 +353,7 @@ cron.schedule('0 * * * *', async () => {
         const accessToken = tokenRes.data.access_token;
         if (tokenRes.data.refresh_token) {
           await pool.query(
-            'UPDATE user_playlists SET refresh_token = $1 WHERE user_id = $2',
+            'UPDATE spotify_app.user_playlists SET refresh_token = $1 WHERE user_id = $2',
             [tokenRes.data.refresh_token, user.user_id]
           );
         }
@@ -318,7 +376,7 @@ cron.schedule('0 * * * *', async () => {
 
         // 4. Update last_updated timestamp
         await pool.query(
-          'UPDATE user_playlists SET last_updated = NOW() WHERE user_id = $1',
+          'UPDATE spotify_app.user_playlists SET last_updated = NOW() WHERE user_id = $1',
           [user.user_id]
         );
 
@@ -329,7 +387,7 @@ cron.schedule('0 * * * *', async () => {
         // If refresh token is invalid, nullify it in the DB
         if (errorData && errorData.error === 'invalid_grant') {
           await pool.query(
-            'UPDATE user_playlists SET refresh_token = NULL WHERE user_id = $1',
+            'UPDATE spotify_app.user_playlists SET refresh_token = NULL WHERE user_id = $1',
             [user.user_id]
           );
           console.log(`Refresh token revoked for user ${user.user_id}, set to NULL in DB.`);
