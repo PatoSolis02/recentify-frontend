@@ -5,6 +5,11 @@ function Welcome() {
   const location = useLocation();
   const [accessToken, setAccessToken] = useState(null);
   const [userId, setUserId] = useState(null);
+  const [playlistName, setPlaylistName] = useState("");
+  const [maxSongs, setMaxSongs] = useState(1);
+  const [userPlaylist, setUserPlaylist] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -34,30 +39,93 @@ function Welcome() {
   }, [accessToken]);
 
   useEffect(() => {
-  if (userId) {
-    fetch("http://127.0.0.1:5173/api/user_playlists", {
+    if (userId) {
+      setLoading(true);
+      fetch("http://127.0.0.1:5173/api/user_playlists", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ userId }),
+      })
+        .then((res) => res.json())
+        .then((data) => {
+          setUserPlaylist(data.userPlaylist);
+          setLoading(false);
+        })
+        .catch((err) => {
+          setError("Error loading user playlist row");
+          setLoading(false);
+        });
+    }
+  }, [userId]);
+
+  const handleCreatePlaylist = () => {
+    setError("");
+    if (!playlistName || !maxSongs || maxSongs < 1 || maxSongs > 50) {
+      setError("Please enter a playlist name and a valid number of songs (1-50)");
+      return;
+    }
+    setLoading(true);
+    fetch("http://127.0.0.1:5173/api/spotify/create_playlist", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ userId }),
+      body: JSON.stringify({
+        accessToken,
+        userId,
+        name: playlistName,
+        maxSongs: Number(maxSongs),
+      }),
     })
       .then((res) => res.json())
       .then((data) => {
-        // Optionally handle response
-        console.log("User playlist row inserted:", data);
+        if (data.spotifyPlaylistId) {
+          setUserPlaylist({ ...userPlaylist, playlist_id: data.spotifyPlaylistId });
+        }
+        setLoading(false);
       })
-      .catch((err) => {
-        console.error("Error inserting user playlist row:", err);
+      .catch(() => {
+        setError("Error creating Spotify playlist");
+        setLoading(false);
       });
-  }
-}, [userId]);
+  };
 
   return (
     <div>
       {accessToken ? (
         userId ? (
-          <h2>Logged in! User ID: {userId}</h2>
+          <>
+            <h2>Logged in! User ID: {userId}</h2>
+            {loading && <p>Loading...</p>}
+            {error && <p style={{ color: "red" }}>{error}</p>}
+            {userPlaylist && userPlaylist.playlist_id ? (
+              <div>
+                <h3>Your Playlist</h3>
+                <p>Playlist ID: {userPlaylist.playlist_id}</p>
+              </div>
+            ) : (
+              <div>
+                <input
+                  type="text"
+                  placeholder="Playlist Name"
+                  value={playlistName}
+                  onChange={(e) => setPlaylistName(e.target.value)}
+                />
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={maxSongs}
+                  onChange={(e) => setMaxSongs(Number(e.target.value))}
+                />
+                <button onClick={handleCreatePlaylist} disabled={loading}>
+                  Create Playlist
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           <h2>Logged in! Access token is available.</h2>
         )

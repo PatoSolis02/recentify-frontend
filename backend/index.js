@@ -4,6 +4,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const { type } = require('os');
 require('dotenv').config();
 
 const app = express();
@@ -182,6 +183,55 @@ app.post('/api/user_playlists', async (req, res) => {
   } catch (error) {
     console.error('Error inserting user:', error);
     res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Endpoint to update playlist_id for a user in user_playlists
+app.post('/api/user_playlists/update', async (req, res) => {
+  const { userId, playlistId } = req.body;
+  if (!userId || !playlistId) {
+    return res.status(400).json({ error: 'userId and playlistId are required' });
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE user_playlists SET playlist_id = $1 WHERE user_id = $2 RETURNING *',
+      [playlistId, userId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ userPlaylist: result.rows[0] });
+  } catch (error) {
+    console.error('Error updating user playlist:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+// Endpoint to create a playlist on Spotify and in the local DB
+app.post('/api/spotify/create_playlist', async (req, res) => {
+  const { accessToken, userId, name, maxSongs } = req.body;
+  if (!accessToken || !userId || !name || !maxSongs) {
+    return res.status(400).json({ error: 'accessToken, userId, name, and maxSongs are required' });
+  }
+  try {
+    // Create playlist on Spotify
+    console.log('maxSongs:', maxSongs, typeof maxSongs);
+    const spotifyRes = await axios.post(
+      `https://api.spotify.com/v1/users/${userId}/playlists`,
+      { name, description: `Recentify playlist (${maxSongs} songs)`, public: true },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const spotifyPlaylistId = spotifyRes.data.id;
+    // Update user_playlists with Spotify playlist id and song_count
+
+    await pool.query(
+      'UPDATE user_playlists SET playlist_id = $1, song_count = $2 WHERE user_id = $3',
+      [spotifyPlaylistId, parseInt(maxSongs, 10), userId]
+    );
+    res.json({ spotifyPlaylistId });
+  } catch (error) {
+    console.error('Error creating Spotify playlist:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to create Spotify playlist' });
   }
 });
 
