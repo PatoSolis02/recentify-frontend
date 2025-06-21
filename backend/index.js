@@ -54,7 +54,7 @@ const pool = new Pool({
   user: 'postgres',
   host: 'localhost',
   database: 'postgres',
-  password: '@areaSport42',
+  password: 'JjJ10232003?',
   port: 5432,
 });
 
@@ -325,6 +325,52 @@ app.post('/api/spotify/playlist_exists_in_list', async (req, res) => {
   } catch (err) {
     console.error('Error checking playlist in user list:', err.response?.data || err.message);
     res.status(500).json({ error: 'Failed to check playlist in user list' });
+  }
+});
+
+// Endpoint to edit playlist name, song count, and update description
+app.post('/api/user_playlists/edit', async (req, res) => {
+  const { userId, playlistId, newName, newSongCount, accessToken } = req.body;
+  if (!userId || !playlistId || !newName || !newSongCount || !accessToken) {
+    return res.status(400).json({ error: 'userId, playlistId, newName, newSongCount, and accessToken are required' });
+  }
+  try {
+    // Update playlist name and description on Spotify
+    await axios.put(
+      `https://api.spotify.com/v1/playlists/${playlistId}`,
+      {
+        name: newName,
+        description: `Recentify playlist (${newSongCount} songs)`
+      },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    // Fetch latest liked songs up to newSongCount
+    const likedRes = await axios.get(
+      `https://api.spotify.com/v1/me/tracks?limit=${newSongCount}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const trackUris = likedRes.data.items.map(item => item.track.uri);
+
+    // Replace playlist tracks if needed
+    if (trackUris.length > 0) {
+      await axios.put(
+        `https://api.spotify.com/v1/playlists/${playlistId}/tracks`,
+        { uris: trackUris },
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+    }
+
+    // Update DB with new name and song count
+    await pool.query(
+      'UPDATE spotify_app.user_playlists SET song_count = $1, last_updated = NOW() WHERE user_id = $2',
+      [parseInt(newSongCount, 10), userId]
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error editing playlist:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to edit playlist' });
   }
 });
 
