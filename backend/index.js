@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 const { type } = require('os');
+const cron = require('node-cron');
 require('dotenv').config();
 
 const app = express();
@@ -57,21 +58,9 @@ const pool = new Pool({
   port: 5432,
 });
 
-const createTableQuery = `
-CREATE TABLE IF NOT EXISTS spotify_app.playlists (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(255) NOT NULL,
-  max_songs INTEGER NOT NULL CHECK (max_songs <= 50)
-)
-`;
-
 pool.on('connect', (client) => {
   client.query('SET search_path TO spotify_app');
 });
-
-pool.query(createTableQuery)
-  .then(() => console.log('Playlists table ready'))
-  .catch((err) => console.error('Error creating table', err));
 
 app.get('/login', (req, res) => {
   const codeVerifier = generateCodeVerifier();
@@ -80,7 +69,7 @@ app.get('/login', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   codeVerifierStore.set(state, codeVerifier);
 
-  const scope = 'playlist-modify-public playlist-modify-private user-read-private user-read-email';
+  const scope = 'playlist-modify-public playlist-modify-private user-read-private user-read-email user-library-read';
 
   const authURL = new URL('https://accounts.spotify.com/authorize');
   authURL.searchParams.append('client_id', CLIENT_ID);
@@ -127,6 +116,37 @@ app.get('/callback', async (req, res) => {
 
     codeVerifierStore.delete(state);
 
+    // Store refresh_token in user_playlists table if user exists
+    try {
+      // Get user id from Spotify API
+      const userRes = await axios.get('https://api.spotify.com/v1/me', {
+        headers: { Authorization: `Bearer ${access_token}` },
+      });
+      const userId = userRes.data.id;
+      if (refresh_token && userId) {
+        // Check if user exists in user_playlists
+        const userCheck = await pool.query(
+          'SELECT * FROM user_playlists WHERE user_id = $1',
+          [userId]
+        );
+        if (userCheck.rows.length === 0) {
+          // Insert new user with refresh_token
+          await pool.query(
+            'INSERT INTO user_playlists (user_id, refresh_token) VALUES ($1, $2)',
+            [userId, refresh_token]
+          );
+        } else {
+          // Update existing user's refresh_token
+          await pool.query(
+            'UPDATE user_playlists SET refresh_token = $1 WHERE user_id = $2',
+            [refresh_token, userId]
+          );
+        }
+      }
+    } catch (err) {
+      console.error('Error storing refresh token:', err.response?.data || err.message);
+    }
+
     // Redirect to the frontend
     const redirectUrl = `http://127.0.0.1:4000/welcome?access_token=${access_token}`;
     console.log('Redirecting to:', redirectUrl);
@@ -134,27 +154,6 @@ app.get('/callback', async (req, res) => {
   } catch (error) {
     console.error('Error fetching tokens:', error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to fetch tokens' });
-  }
-});
-
-// Endpoint to insert playlist (unchanged)
-app.post('/api/playlists', async (req, res) => {
-  const { name, maxSongs } = req.body;
-
-  if (!name || !maxSongs || maxSongs < 1 || maxSongs > 50) {
-    return res.status(400).json({ error: 'Invalid input' });
-  }
-
-  try {
-    const result = await pool.query(
-      'INSERT INTO playlists (name, max_songs) VALUES ($1, $2) RETURNING *',
-      [name, maxSongs]
-    );
-
-    res.json({ playlist: result.rows[0] });
-  } catch (error) {
-    console.error('Error inserting playlist:', error);
-    res.status(500).json({ error: 'Database error' });
   }
 });
 
@@ -224,6 +223,21 @@ app.post('/api/spotify/create_playlist', async (req, res) => {
     const spotifyPlaylistId = spotifyRes.data.id;
     // Update user_playlists with Spotify playlist id and song_count
 
+    const likedRes = await axios.get(
+      `https://api.spotify.com/v1/me/tracks?limit=${maxSongs}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+
+    const trackUris = likedRes.data.items.map(item => item.track.uri);
+
+    if (trackUris.length > 0) {
+      await axios.post(
+        `https://api.spotify.com/v1/playlists/${spotifyPlaylistId}/tracks`,
+        { uris: trackUris },
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+    }
+
     await pool.query(
       'UPDATE user_playlists SET playlist_id = $1, song_count = $2 WHERE user_id = $3',
       [spotifyPlaylistId, parseInt(maxSongs, 10), userId]
@@ -232,6 +246,77 @@ app.post('/api/spotify/create_playlist', async (req, res) => {
   } catch (error) {
     console.error('Error creating Spotify playlist:', error.response?.data || error.message);
     res.status(500).json({ error: 'Failed to create Spotify playlist' });
+  }
+});
+
+cron.schedule('* * * * *', async () => {
+  console.log('Starting daily playlist refresh job...');
+  try {
+    // Get all users with refresh tokens and playlist info
+    const { rows: users } = await pool.query(
+      'SELECT user_id, refresh_token, playlist_id, song_count FROM user_playlists WHERE refresh_token IS NOT NULL AND playlist_id IS NOT NULL'
+    );
+
+    for (const user of users) {
+      try {
+        // 1. Get a new access token using the refresh token
+        const tokenRes = await axios.post(
+          'https://accounts.spotify.com/api/token',
+          new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: user.refresh_token,
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+          }),
+          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+        );
+        
+        const accessToken = tokenRes.data.access_token;
+        if (tokenRes.data.refresh_token) {
+          await pool.query(
+            'UPDATE user_playlists SET refresh_token = $1 WHERE user_id = $2',
+            [tokenRes.data.refresh_token, user.user_id]
+          );
+        }
+
+        // 2. Fetch the latest liked songs
+        const likedRes = await axios.get(
+          `https://api.spotify.com/v1/me/tracks?limit=${user.song_count || 20}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const trackUris = likedRes.data.items.map(item => item.track.uri);
+
+        // 3. Replace the playlist's tracks with the new set
+        if (trackUris.length > 0) {
+          await axios.put(
+            `https://api.spotify.com/v1/playlists/${user.playlist_id}/tracks`,
+            { uris: trackUris },
+            { headers: { Authorization: `Bearer ${accessToken}` } }
+          );
+        }
+
+        // 4. Update last_updated timestamp
+        await pool.query(
+          'UPDATE user_playlists SET last_updated = NOW() WHERE user_id = $1',
+          [user.user_id]
+        );
+
+        console.log(`Refreshed playlist for user ${user.user_id}`);
+      } catch (err) {
+        const errorData = err.response?.data || err.message;
+        console.error(`Failed to refresh playlist for user ${user.user_id}:`, errorData);
+        // If refresh token is invalid, nullify it in the DB
+        if (errorData && errorData.error === 'invalid_grant') {
+          await pool.query(
+            'UPDATE user_playlists SET refresh_token = NULL WHERE user_id = $1',
+            [user.user_id]
+          );
+          console.log(`Refresh token revoked for user ${user.user_id}, set to NULL in DB.`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error running daily playlist refresh job:', err.message);
   }
 });
 
