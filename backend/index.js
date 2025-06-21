@@ -58,9 +58,30 @@ const pool = new Pool({
   port: 5432,
 });
 
-pool.on('connect', (client) => {
-  client.query('SET search_path TO spotify_app');
-});
+// Ensure spotify_app schema exists
+pool.query('CREATE SCHEMA IF NOT EXISTS spotify_app')
+  .then(() => {
+    console.log('spotify_app schema is ready');
+    // Set search_path after schema is ready
+    pool.query('SET search_path TO spotify_app');
+    // Now create the table
+    return pool.query(`
+      CREATE TABLE IF NOT EXISTS user_playlists (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) UNIQUE NOT NULL,
+        playlist_id VARCHAR(255),
+        song_count INT2,
+        last_updated TIMESTAMP,
+        refresh_token VARCHAR(255)
+      )
+    `);
+  })
+  .then(() => {
+    console.log('user_playlists table is ready');
+  })
+  .catch((err) => {
+    console.error('Error setting up schema or table:', err);
+  });
 
 app.get('/login', (req, res) => {
   const codeVerifier = generateCodeVerifier();
@@ -249,8 +270,8 @@ app.post('/api/spotify/create_playlist', async (req, res) => {
   }
 });
 
-cron.schedule('* * * * *', async () => {
-  console.log('Starting daily playlist refresh job...');
+cron.schedule('0 * * * *', async () => {
+  console.log('Starting hourly playlist refresh job...');
   try {
     // Get all users with refresh tokens and playlist info
     const { rows: users } = await pool.query(
