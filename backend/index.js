@@ -79,7 +79,7 @@ app.get('/login', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   codeVerifierStore.set(state, codeVerifier);
 
-  const scope = 'playlist-modify-public playlist-modify-private';
+  const scope = 'playlist-modify-public playlist-modify-private user-read-private user-read-email';
 
   const authURL = new URL('https://accounts.spotify.com/authorize');
   authURL.searchParams.append('client_id', CLIENT_ID);
@@ -153,6 +153,34 @@ app.post('/api/playlists', async (req, res) => {
     res.json({ playlist: result.rows[0] });
   } catch (error) {
     console.error('Error inserting playlist:', error);
+    res.status(500).json({ error: 'Database error' });
+  }
+});
+
+app.post('/api/user_playlists', async (req, res) => {
+  const { userId } = req.body;
+  if (!userId) {
+    return res.status(400).json({ error: 'userId is required' });
+  }
+  try {
+    // Check if user already exists
+    const check = await pool.query(
+      'SELECT * FROM user_playlists WHERE user_id = $1',
+      [userId]
+    );
+    if (check.rows.length > 0) {
+      // User already exists, return existing row
+      console.log('User already exists:', check.rows[0]);
+      return res.json({ userPlaylist: check.rows[0], alreadyExists: true });
+    }
+    // Insert if not exists
+    const result = await pool.query(
+      'INSERT INTO user_playlists (user_id) VALUES ($1) RETURNING *',
+      [userId]
+    );
+    res.json({ userPlaylist: result.rows[0], alreadyExists: false });
+  } catch (error) {
+    console.error('Error inserting user:', error);
     res.status(500).json({ error: 'Database error' });
   }
 });
