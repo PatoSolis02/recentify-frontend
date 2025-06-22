@@ -3,7 +3,7 @@ import React from "react";
 
 function Home() {
   const handleLogin = () => {
-    window.location.href = "http://127.0.0.1:5173/login";
+    window.location.href = "http://127.0.0.1:5173/api/spotify/login";
   };
 
   return (
