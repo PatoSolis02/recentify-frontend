@@ -4,12 +4,14 @@ import { useLocation } from "react-router-dom";
 function Welcome() {
   const location = useLocation();
   const [accessToken, setAccessToken] = useState(null);
-  const [userId, setUserId] = useState(null);
+  const [spotifyUserId, setSpotifyUserId] = useState(null); // Spotify user id
+  const [internalUserId, setInternalUserId] = useState(null); // Internal DB user id
   const [playlistName, setPlaylistName] = useState("");
   const [maxSongs, setMaxSongs] = useState(1);
   const [userPlaylist, setUserPlaylist] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [userDisplayName, setUserDisplayName] = useState(""); // User's display name
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -21,6 +23,7 @@ function Welcome() {
     }
   }, [location]);
 
+  // Get Spotify user id
   useEffect(() => {
     if (accessToken) {
       fetch("https://api.spotify.com/v1/me", {
@@ -30,7 +33,27 @@ function Welcome() {
       })
         .then((response) => response.json())
         .then((data) => {
-          setUserId(data.id);
+          console.log("User data:", data);
+          setSpotifyUserId(data.id);
+          // Get or create internal user row
+          fetch("http://127.0.0.1:5173/api/user_playlists/createOrGetUser", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              spotifyId: data.id,
+              displayName: data.display_name,
+              email: data.email,
+            }),
+          })
+            .then((res) => res.json())
+            .then((userData) => {
+              if (userData && userData.user && userData.user.id) {
+                setInternalUserId(userData.user.id);
+                setUserDisplayName(userData.user.display_name || "");
+              } else {
+                setError("Could not get internal user ID from backend");
+              }
+            });
         })
         .catch((error) => {
           console.error("Error fetching user info:", error);
@@ -38,19 +61,27 @@ function Welcome() {
     }
   }, [accessToken]);
 
+  // Get playlists for internal user id
   useEffect(() => {
-    if (userId) {
+    console.log("Fetching user playlists for internal user ID:", internalUserId);
+    if (internalUserId) {
       setLoading(true);
       fetch("http://127.0.0.1:5173/api/user_playlists", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ userId }),
+        body: JSON.stringify({ userId: internalUserId }),
       })
         .then((res) => res.json())
         .then((data) => {
-          setUserPlaylist(data.userPlaylist);
+          console.log("Fetched user playlists:", data);
+          // If playlists array exists and is not empty, set first playlist; else set to null
+          if (data.playlists && data.playlists.length > 0) {
+            setUserPlaylist(data.playlists[0]);
+          } else {
+            setUserPlaylist(null);
+          }
           setLoading(false);
         })
         .catch((err) => {
@@ -58,11 +89,11 @@ function Welcome() {
           setLoading(false);
         });
     }
-  }, [userId]);
+  }, [internalUserId]);
 
   // Check if playlist exists after loading userPlaylist
   useEffect(() => {
-    if (accessToken && userPlaylist && userPlaylist.playlist_id) {
+    if (accessToken && userPlaylist && userPlaylist.spotify_id) {
       fetch("http://127.0.0.1:5173/api/spotify/playlist_exists_in_list", {
         method: "POST",
         headers: {
@@ -70,13 +101,19 @@ function Welcome() {
         },
         body: JSON.stringify({
           accessToken,
-          playlistId: userPlaylist.playlist_id,
+          playlistId: userPlaylist.spotify_id, // Spotify playlist id
         }),
       })
         .then((res) => res.json())
         .then((data) => {
           if (!data.exists) {
-            setUserPlaylist((prev) => ({ ...prev, playlist_id: null }));
+            // Call backend to delete playlist from DB
+            fetch("http://127.0.0.1:5173/api/user_playlists/delete", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ spotifyId: userPlaylist.spotify_id }),
+            });
+            setUserPlaylist((prev) => ({ ...prev, spotify_id: null }));
             setError("Your playlist was deleted. Please create a new one.");
           }
         })
@@ -84,7 +121,7 @@ function Welcome() {
           setError("Error checking playlist existence");
         });
     }
-  }, [accessToken, userPlaylist && userPlaylist.playlist_id]);
+  }, [accessToken, userPlaylist && userPlaylist.spotify_id]);
 
   const handleCreatePlaylist = () => {
     setError("");
@@ -99,8 +136,7 @@ function Welcome() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        accessToken,
-        userId,
+        userId: spotifyUserId, // use internal user id
         name: playlistName,
         maxSongs: Number(maxSongs),
       }),
@@ -108,7 +144,13 @@ function Welcome() {
       .then((res) => res.json())
       .then((data) => {
         if (data.spotifyPlaylistId) {
-          setUserPlaylist({ ...userPlaylist, playlist_id: data.spotifyPlaylistId });
+          // After creation, set userPlaylist so only edit is shown
+          setUserPlaylist({
+            playlist_id: data.spotifyPlaylistId,
+            id: data.internalPlaylistId, // if your backend returns this
+            song_count: maxSongs,
+            // add any other fields you need
+          });
         }
         setLoading(false);
       })
@@ -121,15 +163,15 @@ function Welcome() {
   return (
     <div>
       {accessToken ? (
-        userId ? (
+        internalUserId ? (
           <>
-            <h2>Logged in! User ID: {userId}</h2>
+            <h2>Logged in! {userDisplayName ? `Welcome, ${userDisplayName}` : spotifyUserId}</h2>
             {loading && <p>Loading...</p>}
             {error && <p style={{ color: "red" }}>{error}</p>}
-            {userPlaylist && userPlaylist.playlist_id ? (
+            {userPlaylist && userPlaylist.spotify_id ? (
               <div>
                 <h3>Your Playlist</h3>
-                <p>Playlist ID: {userPlaylist.playlist_id}</p>
+                <p>Playlist Name: {userPlaylist.name}</p>
                 <input
                   type="text"
                   placeholder="Edit Playlist Name"
@@ -155,11 +197,10 @@ function Welcome() {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
-                        userId,
-                        playlistId: userPlaylist.playlist_id,
+                        playlistId: userPlaylist.spotify_id, // internal playlist id for DB
                         newName: playlistName,
                         newSongCount: Number(maxSongs),
-                        accessToken,
+                        userId: spotifyUserId, // pass Spotify user id for backend to get/refresh token
                       }),
                     })
                       .then((res) => res.json())
@@ -181,7 +222,7 @@ function Welcome() {
                 >
                   Save Changes
                 </button>
-                <p>Description: Recentify playlist ({maxSongs} songs)</p>
+                <p>Description: Recentify playlist ({userPlaylist.song_count} songs)</p>
               </div>
             ) : (
               <div>

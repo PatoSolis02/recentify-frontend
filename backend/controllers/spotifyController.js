@@ -1,14 +1,17 @@
 // controllers/spotifyController.js
-const axios = require('axios');
+require('dotenv').config();
 const pool = require('../db/pool');
-const { generateCodeVerifier, generateCodeChallenge } = require('../utils/auth');
+const { generateCodeVerifier, generateCodeChallenge, getSpotifyTokens } = require('../utils/auth');
+const { upsertSong, insertPlaylistSongsBulk } = require('../utils/dbHelpers');
+const { exchangeRefreshToken } = require('../utils/auth');
+const { getUserLikedTracks, getUserProfile, createPlaylist, addTracksToPlaylist, getPlaylist, getUserPlaylists } = require('../utils/spotifyService');
 
 // In-memory store for code_verifiers, keyed by state
 const codeVerifierStore = new Map();
 
-const CLIENT_ID = '82e8a238ab1644a99aca389bc7e3224a';
-const CLIENT_SECRET = '82faf54b14d647a8a0d4b48d875239f4';
-const REDIRECT_URI = 'http://127.0.0.1:5173/api/spotify/callback';
+const CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
+const CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
+const REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI;
 
 exports.login = (req, res) => {
   const codeVerifier = generateCodeVerifier();
@@ -37,43 +40,32 @@ exports.callback = async (req, res) => {
     return res.status(400).send('Invalid or expired state');
   }
   try {
-    const response = await axios.post(
-      'https://accounts.spotify.com/api/token',
-      new URLSearchParams({
-        client_id: CLIENT_ID,
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: REDIRECT_URI,
-        code_verifier: codeVerifier,
-      }),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-    const { access_token, refresh_token } = response.data;
+    const tokenData = await getSpotifyTokens({
+      code,
+      codeVerifier,
+      clientId: CLIENT_ID,
+      redirectUri: REDIRECT_URI
+    });
+    const { access_token, refresh_token } = tokenData;
     codeVerifierStore.delete(state);
     try {
-      const userRes = await axios.get('https://api.spotify.com/v1/me', {
-        headers: { Authorization: `Bearer ${access_token}` },
-      });
+      const userRes = await getUserProfile(access_token);
       const userId = userRes.data.id;
-      if (refresh_token && userId) {
-        const userCheck = await pool.query(
-          'SELECT * FROM spotify_app.user_playlists WHERE user_id = $1',
-          [userId]
-        );
-        if (userCheck.rows.length === 0) {
-          await pool.query(
-            'INSERT INTO spotify_app.user_playlists (user_id, refresh_token) VALUES ($1, $2)',
-            [userId, refresh_token]
-          );
-        } else {
-          await pool.query(
-            'UPDATE spotify_app.user_playlists SET refresh_token = $1 WHERE user_id = $2',
-            [refresh_token, userId]
-          );
-        }
+      const displayName = userRes.data.display_name;
+      const email = userRes.data.email;
+      if (userId) {
+        // Insert or update user in DB with all info
+        await pool.query(`
+          INSERT INTO spotify_app.users (spotify_id, display_name, email, refresh_token)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (spotify_id) DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            email = EXCLUDED.email,
+            refresh_token = EXCLUDED.refresh_token
+        `, [userId, displayName, email, refresh_token]);
       }
     } catch (err) {
-      console.error('Error storing refresh token:', err.response?.data || err.message);
+      console.error('Error storing user info:', err.response?.data || err.message);
     }
     const redirectUrl = `http://127.0.0.1:4000/welcome?access_token=${access_token}`;
     res.redirect(redirectUrl);
@@ -84,33 +76,78 @@ exports.callback = async (req, res) => {
 };
 
 exports.createPlaylist = async (req, res) => {
-  const { accessToken, userId, name, maxSongs } = req.body;
-  if (!accessToken || !userId || !name || !maxSongs) {
-    return res.status(400).json({ error: 'accessToken, userId, name, and maxSongs are required' });
+  const { userId, name, maxSongs } = req.body;
+  console.log('req.body:', req.body);
+  if (!userId || !name || !maxSongs) {
+    return res.status(400).json({ error: 'userId, name, and maxSongs are required' });
   }
   try {
-    const spotifyRes = await axios.post(
-      `https://api.spotify.com/v1/users/${userId}/playlists`,
-      { name, description: `Recentify playlist (${maxSongs} songs)`, public: true },
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const spotifyPlaylistId = spotifyRes.data.id;
-    const likedRes = await axios.get(
-      `https://api.spotify.com/v1/me/tracks?limit=${maxSongs}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-    const trackUris = likedRes.data.items.map(item => item.track.uri);
-    if (trackUris.length > 0) {
-      await axios.post(
-        `https://api.spotify.com/v1/playlists/${spotifyPlaylistId}/tracks`,
-        { uris: trackUris },
-        { headers: { Authorization: `Bearer ${accessToken}` } }
+    // Get refresh token from DB
+    const userRes = await pool.query('SELECT spotify_id, refresh_token FROM spotify_app.users WHERE spotify_id = $1', [userId]);
+    if (userRes.rows.length === 0) {
+      return res.status(400).json({ error: 'User not found in database' });
+    }
+    const { spotify_id, refresh_token } = userRes.rows[0];
+    if (!refresh_token) {
+      return res.status(400).json({ error: 'No refresh token for user' });
+    }
+    // Exchange refresh token for access token
+    const tokenData = await exchangeRefreshToken(refresh_token, CLIENT_ID, CLIENT_SECRET);
+    const accessToken = tokenData.access_token;
+    if (tokenData.refresh_token) {
+      await pool.query(
+         'UPDATE spotify_app.users SET refresh_token = $1 WHERE spotify_id = $2',
+        [tokenData.refresh_token, spotify_id]
       );
     }
-    await pool.query(
-      'UPDATE spotify_app.user_playlists SET playlist_id = $1, song_count = $2 WHERE user_id = $3',
-      [spotifyPlaylistId, parseInt(maxSongs, 10), userId]
+    // Create playlist on Spotify
+    const spotifyRes = await createPlaylist(accessToken, spotify_id, name, `Recentify playlist (${maxSongs} songs)`, true);
+    const spotifyPlaylistId = spotifyRes.data.id;
+    // Get liked tracks
+    const likedRes = await getUserLikedTracks(accessToken, maxSongs);
+    const trackUris = likedRes.data.items.map(item => item.track.uri);
+    if (trackUris.length > 0) {
+      // Add tracks to playlist
+      await addTracksToPlaylist(accessToken, spotifyPlaylistId, trackUris);
+    }
+    // Find the user's internal id
+    const internalUserRes = await pool.query('SELECT id FROM spotify_app.users WHERE spotify_id = $1', [spotify_id]);
+    if (internalUserRes.rows.length === 0) {
+      return res.status(400).json({ error: 'User not found in database' });
+    }
+    const internalUserId = internalUserRes.rows[0].id;
+    // Check if playlist already exists in the DB by Spotify playlist id
+    let playlistRes = await pool.query(
+      'SELECT id FROM spotify_app.playlists WHERE spotify_id = $1',
+      [spotifyPlaylistId]
     );
+    let playlistDbId;
+    if (playlistRes.rows.length > 0) {
+      // Update existing playlist
+      playlistDbId = playlistRes.rows[0].id;
+      await pool.query(
+        'UPDATE spotify_app.playlists SET user_id = $1, name = $2, song_count = $3, last_updated = NOW() WHERE id = $4',
+        [internalUserId, name, trackUris.length, playlistDbId]
+      );
+    } else {
+      // Insert new playlist
+      const insertRes = await pool.query(
+        'INSERT INTO spotify_app.playlists (spotify_id, user_id, name, song_count, last_updated) VALUES ($1, $2, $3, $4, NOW()) RETURNING id',
+        [spotifyPlaylistId, internalUserId, name, trackUris.length]
+      );
+      playlistDbId = insertRes.rows[0].id;
+    }
+    // Optionally, update playlist_songs table (clear and insert new)
+    await pool.query('DELETE FROM spotify_app.playlist_songs WHERE playlist_id = $1', [playlistDbId]);
+    if (trackUris.length > 0) {
+      const songIds = [];
+      for (const item of likedRes.data.items) {
+        const track = item.track;
+        const songId = await upsertSong(track);
+        songIds.push(songId);
+      }
+      await insertPlaylistSongsBulk(playlistDbId, songIds);
+    }
     res.json({ spotifyPlaylistId });
   } catch (error) {
     console.error('Error creating Spotify playlist:', error.response?.data || error.message);
@@ -124,10 +161,7 @@ exports.checkPlaylist = async (req, res) => {
     return res.status(400).json({ error: 'accessToken and playlistId are required' });
   }
   try {
-    await axios.get(
-      `https://api.spotify.com/v1/playlists/${playlistId}`,
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
+    await getPlaylist(accessToken, playlistId);
     res.json({ exists: true });
   } catch (err) {
     const statusCode = err.response?.status;
@@ -148,9 +182,7 @@ exports.playlistExistsInList = async (req, res) => {
     let url = 'https://api.spotify.com/v1/me/playlists?limit=50';
     let exists = false;
     while (url) {
-      const response = await axios.get(url, {
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
+      const response = await getUserPlaylists(accessToken, url);
       if (response.data && response.data.items) {
         if (response.data.items.some(pl => pl.id === playlistId)) {
           exists = true;

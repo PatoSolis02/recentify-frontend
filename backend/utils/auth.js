@@ -1,5 +1,6 @@
 // utils/auth.js
 const crypto = require('crypto');
+const axios = require('axios');
 
 function base64URLEncode(buffer) {
   return buffer
@@ -23,8 +24,39 @@ function generateCodeChallenge(codeVerifier) {
   return base64URLEncode(hash);
 }
 
+async function exchangeRefreshToken(refresh_token, client_id, client_secret) {
+  const tokenRes = await axios.post(
+    'https://accounts.spotify.com/api/token',
+    new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token,
+      client_id,
+      client_secret,
+    }),
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+  );
+  return tokenRes.data;
+}
+
+async function getSpotifyTokens({ code, codeVerifier, clientId, redirectUri }) {
+  const response = await axios.post(
+    'https://accounts.spotify.com/api/token',
+    new URLSearchParams({
+      client_id: clientId,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+    }),
+    { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+  );
+  return response.data;
+}
+
 module.exports = {
   base64URLEncode,
   generateCodeVerifier,
   generateCodeChallenge,
+  exchangeRefreshToken,
+  getSpotifyTokens,
 };

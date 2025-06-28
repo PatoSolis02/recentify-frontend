@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 require('dotenv').config();
-const setupDatabase = require('./db/setup');
+// const setupDatabase = require('./db/setup');
 const startPlaylistRefreshJob = require('./cron/playlistRefresh');
 
 const spotifyRoutes = require('./routes/spotify');
@@ -19,15 +19,14 @@ app.use(
 );
 app.use(bodyParser.json());
 
-// Setup DB and start cron job before server starts
-setupDatabase().then(() => {
-  startPlaylistRefreshJob();
+// If you need to initialize the DB locally, run setupDatabase() manually.
+// For production, do not run setupDatabase() automatically.
+startPlaylistRefreshJob();
 
-  // Mount routes
-  app.use('/api/spotify', spotifyRoutes);
-  app.use('/api/user_playlists', userPlaylistsRoutes);
+// Mount routes
+app.use('/api/spotify', spotifyRoutes);
+app.use('/api/user_playlists', userPlaylistsRoutes);
 
-  app.listen(port, host, () => {
-    console.log(`Backend server listening at http://${host}:${port}`);
-  });
+app.listen(port, host, () => {
+  console.log(`Backend server listening at http://${host}:${port}`);
 });
