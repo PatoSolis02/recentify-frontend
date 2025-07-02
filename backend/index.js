@@ -9,12 +9,14 @@ const spotifyRoutes = require('./routes/spotify');
 const userPlaylistsRoutes = require('./routes/userPlaylists');
 
 const app = express();
-const port = 5173;
-const host = '127.0.0.1';
 
+// Use port from environment or fallback to 3000 for local dev
+const port = process.env.PORT || 3000;
+
+// For Elastic Beanstalk, listen on all interfaces (0.0.0.0)
 app.use(
   cors({
-    origin: 'http://127.0.0.1:4000',
+    origin: '*', // For testing only, restrict in production!
   })
 );
 app.use(bodyParser.json());
@@ -27,6 +29,7 @@ startPlaylistRefreshJob();
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/user_playlists', userPlaylistsRoutes);
 
-app.listen(port, host, () => {
-  console.log(`Backend server listening at http://${host}:${port}`);
+// Listen without specifying host to bind all interfaces
+app.listen(port, () => {
+  console.log(`Backend server listening on port ${port}`);
 });

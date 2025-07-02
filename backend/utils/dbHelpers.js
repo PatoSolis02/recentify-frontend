@@ -38,4 +38,4 @@ async function insertPlaylistSongsBulk(playlistId, songIds) {
   );
 }
 
-module.exports = { upsertSong, insertPlaylistSong, insertPlaylistSongsBulk };
+module.exports = { upsertSong, insertPlaylistSongsBulk };
