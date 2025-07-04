@@ -6,7 +6,7 @@ function Home() {
   const handleLogin = () => {
     // Use the local backend URL for login
     // window.location.href = "http://127.0.0.1:8888/api/spotify/login";
-    window.location.href = "http://recentify.us-east-1.elasticbeanstalk.com/api/spotify/login";
+    window.location.href = "https://acca-2600-4040-57d7-b000-e063-308f-f49e-897e.ngrok-free.app/api/spotify/login";
   };
 
   return (
