@@ -1,12 +1,11 @@
-import { BrowserRouter as Router, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
 import React from "react";
 import Welcome from "./Welcome";
 import Home from "./Home";
 
-
 function App() {
   return (
-    <Router>
+    <Router basename="/recentify-frontend">
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/welcome" element={<Welcome />} />
