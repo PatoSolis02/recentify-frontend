@@ -3,7 +3,7 @@ import React from "react";
 
 function Home() {
   const handleLogin = () => {
-    window.location.href = "http://recentify.us-east-1.elasticbeanstalk.com/api/spotify/login";
+    window.location.href = "https://recentify.us-east-1.elasticbeanstalk.com/api/spotify/login";
   };
 
   return (
