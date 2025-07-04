@@ -4,12 +4,12 @@
   "description": "",
   "main": "index.js",
   "homepage": "https://PatoSolis02.github.io/recentify",
-  "scripts": {
-    "start": "webpack serve --mode development",
-    "build": "webpack --mode production",
-    "predeploy": "npm run build",
-    "deploy": "gh-pages -d build"
-  },
+"scripts": {
+  "start": "webpack serve --mode development",
+  "build": "webpack --mode production",
+  "predeploy": "npm run build",
+  "deploy": "gh-pages -d dist"
+},
   "keywords": [],
   "author": "",
   "license": "ISC",
@@ -23,10 +23,11 @@
     "react-router-dom": "^7.6.2"
   },
   "devDependencies": {
-    "@babel/core": "^7.27.4",
-    "@babel/preset-env": "^7.27.2",
+    "@babel/core": "^7.28.0",
+    "@babel/preset-env": "^7.28.0",
     "@babel/preset-react": "^7.27.1",
     "babel-loader": "^10.0.0",
+    "dotenv-webpack": "^8.1.1",
     "gh-pages": "^6.3.0",
     "html-webpack-plugin": "^5.6.3",
     "webpack": "^5.99.9",

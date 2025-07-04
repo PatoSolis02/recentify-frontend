@@ -1,3 +1,7 @@
+
+// Set your backend URL here (production only)
+const BACKEND_URL = "http://recentify.us-east-1.elasticbeanstalk.com";
+
 import React, { useState } from "react";
 
 function PlaylistManager({
@@ -21,7 +25,7 @@ function PlaylistManager({
       return;
     }
     setLoading(true);
-    fetch("http://127.0.0.1:5173/api/spotify/create_playlist", {
+    fetch(`${BACKEND_URL}/api/spotify/create_playlist`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -53,7 +57,7 @@ function PlaylistManager({
       return;
     }
     setLoading(true);
-    fetch("http://127.0.0.1:5173/api/user_playlists/edit", {
+    fetch(`${BACKEND_URL}/api/user_playlists/edit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

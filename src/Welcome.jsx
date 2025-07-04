@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
 
+const BACKEND_URL = "http://recentify.us-east-1.elasticbeanstalk.com";
+
 function Welcome() {
   const location = useLocation();
   const [accessToken, setAccessToken] = useState(null);
@@ -36,7 +38,7 @@ function Welcome() {
           console.log("User data:", data);
           setSpotifyUserId(data.id);
           // Get or create internal user row
-          fetch("http://127.0.0.1:5173/api/user_playlists/createOrGetUser", {
+      fetch(`${BACKEND_URL}/api/user_playlists/createOrGetUser`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -66,7 +68,7 @@ function Welcome() {
     console.log("Fetching user playlists for internal user ID:", internalUserId);
     if (internalUserId) {
       setLoading(true);
-      fetch("http://127.0.0.1:5173/api/user_playlists", {
+      fetch(`${BACKEND_URL}/api/user_playlists`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -94,7 +96,7 @@ function Welcome() {
   // Check if playlist exists after loading userPlaylist
   useEffect(() => {
     if (accessToken && userPlaylist && userPlaylist.spotify_id) {
-      fetch("http://127.0.0.1:5173/api/spotify/playlist_exists_in_list", {
+      fetch(`${BACKEND_URL}/api/spotify/playlist_exists_in_list`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -108,7 +110,7 @@ function Welcome() {
         .then((data) => {
           if (!data.exists) {
             // Call backend to delete playlist from DB
-            fetch("http://127.0.0.1:5173/api/user_playlists/delete", {
+            fetch(`${BACKEND_URL}/api/user_playlists/delete`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ spotifyId: userPlaylist.spotify_id }),
@@ -130,7 +132,7 @@ function Welcome() {
       return;
     }
     setLoading(true);
-    fetch("http://127.0.0.1:5173/api/spotify/create_playlist", {
+    fetch(`${BACKEND_URL}/api/spotify/create_playlist`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -193,7 +195,7 @@ function Welcome() {
                       return;
                     }
                     setLoading(true);
-                    fetch("http://127.0.0.1:5173/api/user_playlists/edit", {
+                    fetch(`${BACKEND_URL}/api/user_playlists/edit`, {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
